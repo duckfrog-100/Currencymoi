@@ -1,3 +1,4 @@
+import { staleLimitForQuote } from "./config.mjs";
 import { rankCandidates } from "./scoring.mjs";
 
 function scoreValue(decision) {
@@ -12,10 +13,7 @@ function quoteIsUsable(quote, now, staleAfterMs) {
   if (!quote || !(quote.tradePrice > 0) || !(quote.bestBid > 0) || !(quote.bestAsk > 0)) return false;
   const timestamp = Number(quote.timestamp);
   if (!Number.isFinite(timestamp)) return false;
-  const allowedAge = Number.isFinite(staleAfterMs)
-    ? staleAfterMs
-    : quote.source === "rest" ? 35_000 : 15_000;
-  return now - timestamp <= allowedAge;
+  return now - timestamp <= staleLimitForQuote(quote, staleAfterMs);
 }
 
 export function processDecisionBatch({
