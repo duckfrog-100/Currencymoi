@@ -1,0 +1,37 @@
+name: One-off 30-day backtest
+
+on:
+  push:
+    branches:
+      - analysis/backtest-2026-06-27-2026-07-27
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependency
+        run: pip install requests
+
+      - name: Run backtest
+        run: python scripts/backtest_last_30d.py
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-result
+          path: backtest-result.json
+          if-no-files-found: warn
