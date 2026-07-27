@@ -39,10 +39,9 @@ jobs:
 
       - name: Check browser JavaScript syntax
         run: |
-          node --check docs/core.mjs
-          node --check docs/feed.mjs
-          node --check docs/chart.mjs
-          node --check docs/app.mjs
+          for file in docs/*.mjs; do
+            node --check "$file"
+          done
 
-      - name: Run browser core tests
-        run: node --test web-tests/core.test.mjs
+      - name: Run browser tests
+        run: node --test web-tests/*.test.mjs
