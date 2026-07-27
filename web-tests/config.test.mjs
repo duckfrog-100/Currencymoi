@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { strategyConfigForMode } from "../docs/config.mjs";
+import { staleLimitForQuote, strategyConfigForMode } from "../docs/config.mjs";
 
 test("public mode leaves stale thresholds to the quotation source", () => {
   const config = strategyConfigForMode("public");
@@ -19,4 +19,10 @@ test("offline demo uses five-second candles and an eight-second stale limit", ()
     slowPeriod: 7,
     staleAfterMs: 8_000,
   });
+});
+
+test("an explicit threshold cannot make a quotation source less strict", () => {
+  assert.equal(staleLimitForQuote({ source: "websocket" }, 35_000), 15_000);
+  assert.equal(staleLimitForQuote({ source: "rest" }, 35_000), 35_000);
+  assert.equal(staleLimitForQuote({ source: "offline" }, 8_000), 8_000);
 });
