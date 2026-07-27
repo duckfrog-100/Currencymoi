@@ -14,6 +14,7 @@ const requiredIds = [
   "resetButton",
   "modeSelect",
   "feeInput",
+  "bootstrapStatus",
   "botStatus",
   "connectionStatus",
   "modeStatus",
@@ -54,4 +55,9 @@ test("detail navigation contains all five fixed markets", () => {
   for (const market of ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE"]) {
     assert.match(html, new RegExp(`data-market=["']${market}["']`), `missing ${market}`);
   }
+});
+
+test("page loads the warmup entrypoint before the dashboard app", () => {
+  assert.match(html, /src=["']\.\/main\.mjs["']/);
+  assert.doesNotMatch(html, /src=["']\.\/app\.mjs["']/);
 });

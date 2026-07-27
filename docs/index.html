@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#090d18">
   <title>Currencymoi · 멀티코인 모의투자</title>
   <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./warmup.css">
 </head>
 <body>
   <header class="topbar">
@@ -22,6 +23,10 @@
     <section class="notice">
       <strong>모의투자 전용</strong>
       <span>API 키·실제 주문·입출금 기능이 없습니다. 공개 시세와 이 브라우저의 localStorage만 사용합니다.</span>
+    </section>
+
+    <section data-id="bootstrapStatus" class="bootstrap-notice" data-state="loading" aria-live="polite">
+      점수 계산에 필요한 최근 봉을 확인하는 중입니다.
     </section>
 
     <nav class="view-tabs panel" aria-label="대시보드 화면">
@@ -152,6 +157,6 @@
   </main>
 
   <footer>교육·프로토타입 목적의 모의투자 도구이며 수익을 보장하거나 투자 판단을 권유하지 않습니다.</footer>
-  <script type="module" src="./app.mjs"></script>
+  <script type="module" src="./main.mjs"></script>
 </body>
 </html>
