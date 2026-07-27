@@ -1,310 +1,523 @@
-import {
-  CandleBuilder,
-  MovingAverageCrossover,
-  PaperBroker,
-  Portfolio,
-  Signal,
-  configForMode,
-  deserializeFill,
-  serializeFill,
-} from "./core.mjs";
-import { UpbitBrowserFeed } from "./feed.mjs";
+import { CandleBuilder, MovingAverageCrossover, Signal } from "./core.mjs";
 import { drawPriceChart } from "./chart.mjs";
+import { processDecisionBatch } from "./decision.mjs";
+import { UpbitBrowserFeed } from "./feed.mjs";
+import { MARKETS, MARKET_BY_CODE, marketCodes } from "./markets.mjs";
+import { SharedPortfolio } from "./portfolio.mjs";
+import { rankCandidates, scoreCandidate } from "./scoring.mjs";
+import { createFreshState, loadModeState, saveModeState } from "./state.mjs";
 
-const STORAGE_KEY = "currencymoi.github-pages.v1";
+const LAST_MODE_KEY = "currencymoi.portfolio.last-mode";
 const MAX_CANDLES = 300;
-const MAX_TRADES = 100;
 const MAX_DECISIONS = 100;
 const MAX_LOGS = 100;
+const MAX_FILLS = 100;
+const SLIPPAGE_RATE = 0.0002;
 
 const elements = Object.fromEntries(
   [...document.querySelectorAll("[data-id]")].map((element) => [element.dataset.id, element]),
 );
 
-let restored = loadSavedState();
-let mode = restored?.mode === "demo" ? "demo" : "normal";
-let config = configForMode(mode);
-let portfolio = Portfolio.fromJSON(restored?.portfolio, config);
-let candles = Array.isArray(restored?.candles) ? restored.candles.slice(-MAX_CANDLES) : [];
-let trades = Array.isArray(restored?.trades) ? restored.trades.map(deserializeFill).slice(0, MAX_TRADES) : [];
-let decisions = Array.isArray(restored?.decisions) ? restored.decisions.slice(0, MAX_DECISIONS) : [];
-let logs = Array.isArray(restored?.logs) ? restored.logs.slice(0, MAX_LOGS) : [];
-let lastProcessedCandle = restored?.lastProcessedCandle ?? null;
+let mode = localStorage.getItem(LAST_MODE_KEY) === "demo" ? "demo" : "public";
 let running = false;
-let market = null;
+let feeRate = 0.0005;
+let selectedMarket = "KRW-BTC";
+let currentView = "portfolio";
+let portfolio = new SharedPortfolio();
+let runtimes = new Map();
+let logs = [];
 let connectionStatus = "연결 대기";
-let offlineDemo = false;
+let feed = null;
 let demoTimer = null;
-let syntheticPrice = 100_000_000;
-let builder;
-let strategy;
-let broker;
+let decisionBuckets = new Map();
+let processedKeys = new Set();
 
-function rebuildStrategy() {
-  config = configForMode(mode);
-  builder = new CandleBuilder(config.candleSeconds);
-  strategy = new MovingAverageCrossover(config.fastPeriod, config.slowPeriod);
-  broker = new PaperBroker(config.feeRate, config.slippageRate);
+function modeConfig(targetMode = mode) {
+  if (targetMode === "demo") {
+    return { candleSeconds: 5, fastPeriod: 3, slowPeriod: 7, staleAfterMs: 8_000 };
+  }
+  return { candleSeconds: 60, fastPeriod: 5, slowPeriod: 20, staleAfterMs: 35_000 };
 }
 
-rebuildStrategy();
+function emptyScore() {
+  return { total: 0, movingAverage: 0, momentum: 0, volume: 0 };
+}
 
-function loadSavedState() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-  } catch {
-    return null;
+function createRuntime(metadata, saved = {}) {
+  const config = modeConfig();
+  const decisions = Array.isArray(saved.decisions) ? saved.decisions.slice(0, MAX_DECISIONS) : [];
+  return {
+    metadata,
+    builder: new CandleBuilder(config.candleSeconds),
+    strategy: new MovingAverageCrossover(config.fastPeriod, config.slowPeriod),
+    candles: Array.isArray(saved.candles) ? saved.candles.slice(-MAX_CANDLES) : [],
+    decisions,
+    latestDecision: decisions[0] || null,
+    latestScore: decisions[0]?.score || emptyScore(),
+    lastProcessedCandle: saved.lastProcessedCandle ?? null,
+    quote: null,
+    syntheticPrice: initialSyntheticPrice(metadata.market),
+  };
+}
+
+function initialSyntheticPrice(market) {
+  return {
+    "KRW-BTC": 150_000_000,
+    "KRW-ETH": 5_000_000,
+    "KRW-XRP": 4_000,
+    "KRW-SOL": 250_000,
+    "KRW-DOGE": 300,
+  }[market] || 1_000;
+}
+
+function hydrateState(targetMode) {
+  const restored = loadModeState(targetMode);
+  mode = restored.mode;
+  running = false;
+  feeRate = Number(restored.feeRate) || 0.0005;
+  selectedMarket = MARKET_BY_CODE.has(restored.selectedMarket) ? restored.selectedMarket : "KRW-BTC";
+  portfolio = SharedPortfolio.fromJSON(restored.portfolio);
+  logs = Array.isArray(restored.logs) ? restored.logs.slice(0, MAX_LOGS) : [];
+  runtimes = new Map(
+    MARKETS.map((metadata) => [metadata.market, createRuntime(metadata, restored.markets?.[metadata.market])]),
+  );
+  processedKeys = new Set();
+  for (const [market, runtime] of runtimes) {
+    if (runtime.lastProcessedCandle != null) processedKeys.add(`${market}:${runtime.lastProcessedCandle}`);
   }
+  elements.feeInput.value = (feeRate * 100).toFixed(2);
+  elements.modeSelect.value = mode;
+}
+
+function statePayload() {
+  return {
+    version: 2,
+    mode,
+    running: false,
+    feeRate,
+    selectedMarket,
+    portfolio: portfolio.toJSON(),
+    markets: Object.fromEntries(
+      [...runtimes].map(([market, runtime]) => [market, {
+        candles: runtime.candles.slice(-MAX_CANDLES),
+        decisions: runtime.decisions.slice(0, MAX_DECISIONS),
+        lastProcessedCandle: runtime.lastProcessedCandle,
+      }]),
+    ),
+    logs: logs.slice(0, MAX_LOGS),
+  };
 }
 
 function persistState() {
   try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        mode,
-        portfolio: portfolio.toJSON(),
-        candles: candles.slice(-MAX_CANDLES),
-        trades: trades.slice(0, MAX_TRADES).map(serializeFill),
-        decisions: decisions.slice(0, MAX_DECISIONS),
-        logs: logs.slice(0, MAX_LOGS),
-        lastProcessedCandle,
-        running: false,
-      }),
-    );
+    saveModeState(mode, statePayload());
+    localStorage.setItem(LAST_MODE_KEY, mode);
   } catch (error) {
-    addLog(`브라우저 저장 실패: ${error.message}`);
+    addLog(`브라우저 저장 실패: ${error.message}`, false);
   }
 }
 
-function addLog(message) {
+function addLog(message, shouldRender = true) {
   const now = new Date();
   logs.unshift(`[${now.toLocaleTimeString("ko-KR", { hour12: false })}] ${message}`);
   logs = logs.slice(0, MAX_LOGS);
+  if (shouldRender) renderLogs();
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function formatKrw(value) {
-  return `${Math.round(value || 0).toLocaleString("ko-KR")}원`;
+  return `${Math.round(Number(value) || 0).toLocaleString("ko-KR")}원`;
 }
 
 function formatRate(value) {
-  const percent = (value || 0) * 100;
+  const percent = (Number(value) || 0) * 100;
   return `${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%`;
 }
 
-function formatBtc(sats) {
-  return (Number(sats) / 100_000_000).toFixed(8);
-}
-
 function formatTime(timestamp) {
-  return new Date(timestamp).toLocaleString("ko-KR", { hour12: false });
+  if (!Number.isFinite(Number(timestamp))) return "-";
+  return new Date(Number(timestamp)).toLocaleString("ko-KR", { hour12: false });
 }
 
-function processMarketSnapshot(snapshot) {
-  market = snapshot;
-  if (offlineDemo || snapshot.source === "offline") {
-    connectionStatus = "오프라인 데모";
-  } else if (snapshot.source === "rest") {
-    connectionStatus = "공개 시세 · 10초 갱신";
-  } else {
-    connectionStatus = "실시간 연결됨";
-  }
+function formatQuantity(market, quantityUnits) {
+  const metadata = MARKET_BY_CODE.get(market);
+  if (!metadata) return "0";
+  const quantity = Number(quantityUnits || 0n) / Number(metadata.unitsPerCoin);
+  const digits = metadata.symbol === "BTC" || metadata.symbol === "ETH" ? 8 : 6;
+  return `${quantity.toFixed(digits)} ${metadata.symbol}`;
 }
 
-function processTradeTick(timestamp, price, volume) {
-  const completed = builder.addTrade(timestamp, price, volume);
-  if (completed) processCompletedCandle(completed);
+function signalLabel(signal) {
+  if (signal === Signal.BUY) return "매수";
+  if (signal === Signal.SELL) return "매도";
+  return "관망";
 }
 
-function processCompletedCandle(candle) {
-  candles.push(candle);
-  candles = candles.slice(-MAX_CANDLES);
-  const decision = strategy.evaluate(candles, portfolio.hasPosition);
-  decisions.unshift(decision);
-  decisions = decisions.slice(0, MAX_DECISIONS);
+function badgeClass(signal) {
+  if (signal === Signal.BUY) return "buy";
+  if (signal === Signal.SELL) return "sell";
+  return "";
+}
 
-  if (lastProcessedCandle === candle.startTime) {
-    addLog("이미 처리한 봉의 중복 주문을 차단했습니다.");
-    persistState();
-    return;
-  }
-  lastProcessedCandle = candle.startTime;
-  if (!running || decision.signal === Signal.HOLD) {
-    persistState();
-    return;
-  }
-  if (!market || Date.now() - market.timestamp > config.staleAfterMs) {
-    addLog("시세가 오래되어 가상 주문을 생성하지 않았습니다.");
-    persistState();
-    return;
-  }
+function quoteMap() {
+  return new Map([...runtimes].map(([market, runtime]) => [market, runtime.quote]));
+}
 
+function processSnapshot(snapshot) {
+  const runtime = runtimes.get(snapshot.market);
+  if (!runtime || (mode === "demo" && snapshot.source !== "offline")) return;
+  runtime.quote = snapshot;
+  if (snapshot.source === "offline") connectionStatus = "오프라인 데모 · 합성 시세";
+  else if (snapshot.source === "rest") connectionStatus = "공개 시세 · 약 21초 갱신";
+  else connectionStatus = "실시간 WebSocket 연결됨";
+  elements.offlineNotice.hidden = snapshot.source !== "rest";
+  render();
+}
+
+function processTradeTick({ market, timestamp, price, volume }) {
+  const runtime = runtimes.get(market);
+  if (!runtime) return;
   try {
-    let fill;
-    if (decision.signal === Signal.BUY) {
-      fill = broker.buy({
-        budget: config.buyBudget,
-        bestAsk: market.bestAsk,
-        timestamp: Date.now(),
-        reason: decision.reason,
-        candleStart: candle.startTime,
-      });
-    } else {
-      fill = broker.sell({
-        quantitySats: portfolio.btcSats,
-        bestBid: market.bestBid,
-        timestamp: Date.now(),
-        reason: decision.reason,
-        candleStart: candle.startTime,
-      });
-    }
-    portfolio.applyFill(fill);
-    trades.unshift(fill);
-    trades = trades.slice(0, MAX_TRADES);
-    addLog(`가상 ${fill.side === "BUY" ? "매수" : "매도"} 체결: ${formatKrw(fill.grossAmount)} · ${formatKrw(fill.executionPrice)}`);
+    const completed = runtime.builder.addTrade(Number(timestamp), Number(price), Number(volume) || 0);
+    if (completed) processCompletedCandle(market, completed);
   } catch (error) {
-    addLog(`가상 주문 차단: ${error.message}`);
+    addLog(`${runtime.metadata.symbol} 시세 처리 실패: ${error.message}`);
   }
-  persistState();
 }
 
-const feed = new UpbitBrowserFeed({
-  market: config.market,
-  onSnapshot: processMarketSnapshot,
-  onTrade: processTradeTick,
-  onEvent: addLog,
-  onStatus: (status) => {
-    connectionStatus = status;
-    if (status === "실시간 연결됨") elements.offlineNotice.hidden = true;
-    render();
-  },
-  onBlocked: () => {
-    elements.offlineNotice.hidden = false;
-    render();
-  },
-});
+function processCompletedCandle(market, candle) {
+  const runtime = runtimes.get(market);
+  runtime.candles.push(candle);
+  runtime.candles = runtime.candles.slice(-MAX_CANDLES);
 
-function startOfflineDemo() {
-  feed.disconnect();
-  offlineDemo = true;
+  const evaluated = runtime.strategy.evaluate(runtime.candles, portfolio.hasMarket(market));
+  const score = evaluated.fastSma == null || evaluated.slowSma == null
+    ? emptyScore()
+    : scoreCandidate({ candles: runtime.candles, fastSma: evaluated.fastSma, slowSma: evaluated.slowSma });
+  const decision = {
+    ...evaluated,
+    market,
+    score,
+    reason: evaluated.reason.replaceAll("BTC", runtime.metadata.symbol),
+  };
+  runtime.latestDecision = decision;
+  runtime.latestScore = score;
+  runtime.decisions.unshift(decision);
+  runtime.decisions = runtime.decisions.slice(0, MAX_DECISIONS);
+
+  const key = `${market}:${candle.startTime}`;
+  if (!running || decision.signal === Signal.HOLD) {
+    processedKeys.add(key);
+    runtime.lastProcessedCandle = candle.startTime;
+    persistState();
+    render();
+    return;
+  }
+  queueDecision(decision);
+  persistState();
+  render();
+}
+
+function queueDecision(decision) {
+  const bucketKey = decision.candleStart;
+  let bucket = decisionBuckets.get(bucketKey);
+  if (!bucket) {
+    bucket = { decisions: new Map(), timer: null };
+    decisionBuckets.set(bucketKey, bucket);
+  }
+  bucket.decisions.set(decision.market, decision);
+  if (!bucket.timer) bucket.timer = setTimeout(() => flushDecisionBucket(bucketKey), 2_000);
+}
+
+function flushDecisionBucket(bucketKey) {
+  const bucket = decisionBuckets.get(bucketKey);
+  if (!bucket) return;
+  clearTimeout(bucket.timer);
+  decisionBuckets.delete(bucketKey);
+  const decisions = [...bucket.decisions.values()];
+  const result = processDecisionBatch({
+    decisions,
+    portfolio,
+    quotes: quoteMap(),
+    feeRate,
+    slippageRate: SLIPPAGE_RATE,
+    now: Date.now(),
+    staleAfterMs: modeConfig().staleAfterMs,
+    processedKeys,
+  });
+  for (const decision of decisions) {
+    const runtime = runtimes.get(decision.market);
+    runtime.lastProcessedCandle = decision.candleStart;
+  }
+  for (const fill of result.fills) {
+    const symbol = MARKET_BY_CODE.get(fill.market)?.symbol || fill.market;
+    addLog(`가상 ${fill.side === "BUY" ? "매수" : "매도"} 체결 · ${symbol} · ${formatKrw(fill.grossAmount)} · 수수료 ${formatKrw(fill.fee)}`, false);
+  }
+  for (const item of result.skipped) {
+    const symbol = MARKET_BY_CODE.get(item.market)?.symbol || item.market;
+    addLog(`${symbol} 주문 보류: ${item.reason}`, false);
+  }
+  portfolio.fills = portfolio.fills.slice(0, MAX_FILLS);
+  persistState();
+  render();
+}
+
+function clearDecisionBuckets() {
+  for (const bucket of decisionBuckets.values()) clearTimeout(bucket.timer);
+  decisionBuckets = new Map();
+}
+
+function createPublicFeed() {
+  return new UpbitBrowserFeed({
+    markets: marketCodes(),
+    onSnapshot: processSnapshot,
+    onTrade: processTradeTick,
+    onEvent: (message) => addLog(message),
+    onStatus: (status) => {
+      connectionStatus = status;
+      elements.offlineNotice.hidden = !status.includes("공개 시세");
+      render();
+    },
+    onBlocked: () => {
+      elements.offlineNotice.hidden = false;
+      render();
+    },
+  });
+}
+
+function startDemoFeed() {
+  connectionStatus = "오프라인 데모 · 합성 시세";
   elements.offlineNotice.hidden = true;
-  connectionStatus = "오프라인 데모";
-  syntheticPrice = market?.tradePrice || syntheticPrice;
-  addLog("실제 주문과 무관한 오프라인 데모 시세를 시작했습니다.");
   clearInterval(demoTimer);
   demoTimer = setInterval(() => {
-    const movement = (Math.random() - 0.49) * 0.002;
-    syntheticPrice = Math.max(1_000, Math.round((syntheticPrice * (1 + movement)) / 1_000) * 1_000);
     const timestamp = Date.now();
-    processMarketSnapshot({
-      timestamp,
-      tradePrice: syntheticPrice,
-      bestBid: syntheticPrice - 1_000,
-      bestAsk: syntheticPrice + 1_000,
-      source: "offline",
-    });
-    processTradeTick(timestamp, syntheticPrice, Math.random() * 0.001);
+    for (const runtime of runtimes.values()) {
+      const movement = (Math.random() - 0.495) * 0.004;
+      runtime.syntheticPrice = Math.max(1, runtime.syntheticPrice * (1 + movement));
+      const price = Math.max(1, Math.round(runtime.syntheticPrice));
+      const spread = Math.max(1, Math.round(price * 0.0001));
+      processSnapshot({
+        market: runtime.metadata.market,
+        timestamp,
+        tradePrice: price,
+        bestBid: Math.max(1, price - spread),
+        bestAsk: price + spread,
+        source: "offline",
+      });
+      processTradeTick({
+        market: runtime.metadata.market,
+        timestamp,
+        price,
+        volume: Math.random() * 10,
+        source: "offline",
+      });
+    }
   }, 1_000);
-  render();
+  addLog("실제 거래소 시세와 분리된 5종 합성 데모를 시작했습니다.");
 }
 
-function stopOfflineDemo() {
-  offlineDemo = false;
+function startDataSource() {
+  stopDataSource();
+  if (mode === "demo") {
+    startDemoFeed();
+  } else {
+    connectionStatus = "실시간 연결 중";
+    feed = createPublicFeed();
+    feed.connect();
+  }
+}
+
+function stopDataSource() {
+  feed?.disconnect();
+  feed = null;
   clearInterval(demoTimer);
   demoTimer = null;
-  market = null;
-  elements.offlineNotice.hidden = true;
-  connectionStatus = "실시간 연결 중";
-  addLog("오프라인 데모를 종료하고 실제 공개 시세 연결을 시도합니다.");
-  feed.connect();
-  render();
+  clearDecisionBuckets();
 }
 
-function changeMode(nextMode) {
-  if (nextMode === mode) return;
+function switchMode(nextMode) {
+  const normalized = nextMode === "demo" ? "demo" : "public";
+  if (normalized === mode) return;
   running = false;
-  mode = nextMode;
-  candles = [];
-  decisions = [];
-  lastProcessedCandle = null;
-  rebuildStrategy();
-  addLog(`전략 모드를 ${mode === "demo" ? "데모" : "일반"}로 변경했습니다.`);
   persistState();
+  stopDataSource();
+  hydrateState(normalized);
+  localStorage.setItem(LAST_MODE_KEY, normalized);
+  addLog(`${normalized === "demo" ? "오프라인 데모" : "공개 시세"} 전용 지갑으로 전환했습니다.`);
+  startDataSource();
   render();
 }
 
 function resetAccount() {
-  if (!window.confirm("가상 지갑과 거래 기록을 지우고 50,000원으로 초기화할까요?")) return;
+  if (!window.confirm(`${mode === "demo" ? "오프라인 데모" : "공개 시세"} 지갑과 기록을 50,000원으로 초기화할까요?`)) return;
   running = false;
-  portfolio = new Portfolio({ startingCash: 50_000, minimumCash: 10_000 });
-  candles = [];
-  trades = [];
-  decisions = [];
-  logs = [];
-  lastProcessedCandle = null;
-  rebuildStrategy();
-  addLog("가상 자금 50,000원으로 초기화했습니다.");
+  clearDecisionBuckets();
+  const fresh = createFreshState(mode);
+  saveModeState(mode, fresh);
+  hydrateState(mode);
+  addLog("공동 가상자금 50,000원으로 초기화했습니다.");
   persistState();
   render();
 }
 
+function showView(view) {
+  currentView = view === "detail" ? "detail" : "portfolio";
+  elements.portfolioView.hidden = currentView !== "portfolio";
+  elements.detailView.hidden = currentView !== "detail";
+  elements.portfolioTab.classList.toggle("active", currentView === "portfolio");
+  elements.detailTab.classList.toggle("active", currentView === "detail");
+  if (currentView === "detail") requestAnimationFrame(renderDetailChart);
+}
+
+function selectMarket(market, openDetail = true) {
+  if (!MARKET_BY_CODE.has(market)) return;
+  selectedMarket = market;
+  persistState();
+  if (openDetail) showView("detail");
+  render();
+}
+
 function render() {
-  const markPrice = market?.tradePrice || portfolio.averageEntryPrice || 0;
-  const snapshot = portfolio.snapshot(markPrice);
+  const snapshot = portfolio.snapshot(quoteMap());
   elements.botStatus.textContent = running ? "실행 중" : "일시정지";
   elements.connectionStatus.textContent = connectionStatus;
-  elements.modeStatus.textContent = mode === "demo" ? "데모 · 5초봉" : "일반 · 1분봉";
-  elements.positionStatus.textContent = snapshot.hasPosition ? "BTC 보유" : "현금 보유";
-  elements.currentPrice.textContent = market ? formatKrw(market.tradePrice) : "연결 대기";
-  elements.bestBid.textContent = market ? formatKrw(market.bestBid) : "-";
-  elements.bestAsk.textContent = market ? formatKrw(market.bestAsk) : "-";
+  elements.modeStatus.textContent = mode === "demo" ? "데모 · 5초봉 SMA 3/7" : "공개 · 1분봉 SMA 5/20";
   elements.totalEquity.textContent = formatKrw(snapshot.totalEquity);
-  elements.totalPnl.textContent = `${snapshot.totalPnl >= 0 ? "+" : ""}${formatKrw(snapshot.totalPnl)}`;
+  elements.totalPnl.textContent = `${snapshot.totalPnl >= 0 ? "+" : ""}${formatKrw(snapshot.totalPnl)} · ${formatRate(snapshot.returnRate)}`;
   elements.cash.textContent = formatKrw(snapshot.cash);
-  elements.btcValue.textContent = formatKrw(snapshot.btcValue);
-  elements.btcQuantity.textContent = formatBtc(snapshot.btcSats);
-  elements.returnRate.textContent = formatRate(snapshot.returnRate);
-  elements.realizedPnl.textContent = formatKrw(snapshot.realizedPnl);
-  elements.lastDecision.textContent = decisions[0]?.reason || "완료된 봉을 기다리는 중입니다.";
-  elements.lastAction.textContent = trades[0]
-    ? `${trades[0].side === "BUY" ? "매수" : "매도"} · ${formatKrw(trades[0].grossAmount)}`
-    : "아직 가상 거래가 없습니다.";
+  elements.positionCount.textContent = `${snapshot.positionCount} / 2`;
+  elements.cumulativeFees.textContent = formatKrw(snapshot.cumulativeFees);
   elements.startButton.disabled = running;
   elements.pauseButton.disabled = !running;
   elements.modeSelect.value = mode;
-  elements.offlineButton.textContent = offlineDemo ? "실제 공개 시세 다시 연결" : "오프라인 데모로 보기";
-  renderTrades();
-  renderDecisions();
+  elements.feeInput.value = (feeRate * 100).toFixed(2);
+  renderMarketCards();
+  renderPositions(snapshot.positions);
+  renderRankedDecisions();
+  renderFills(elements.combinedFills, portfolio.fills);
+  renderDetail();
   renderLogs();
-  drawPriceChart(elements.chart, candles, trades, config);
 }
 
-function renderTrades() {
-  elements.tradeRows.innerHTML = trades.length
-    ? trades.slice(0, 20).map((trade) => `
-      <tr>
-        <td>${formatTime(trade.timestamp)}</td>
-        <td><span class="trade-chip ${trade.side.toLowerCase()}">${trade.side === "BUY" ? "매수" : "매도"}</span></td>
-        <td>${formatKrw(trade.executionPrice)}</td>
-        <td>${formatBtc(trade.quantitySats)}</td>
-        <td>${formatKrw(trade.grossAmount)}</td>
-        <td>${formatKrw(trade.fee)}</td>
-        <td>${formatKrw(trade.realizedPnl || 0)}</td>
-      </tr>`).join("")
-    : `<tr><td colspan="7" class="empty">아직 가상 거래가 없습니다.</td></tr>`;
+function renderMarketCards() {
+  elements.marketCards.innerHTML = MARKETS.map((metadata) => {
+    const runtime = runtimes.get(metadata.market);
+    const quote = runtime.quote;
+    const held = portfolio.hasMarket(metadata.market);
+    const signal = runtime.latestDecision?.signal || Signal.HOLD;
+    const score = Number(runtime.latestScore?.total || 0);
+    return `<button type="button" class="market-card ${held ? "held" : ""} ${selectedMarket === metadata.market ? "selected" : ""}" data-market-card="${metadata.market}">
+      <div class="market-card-head"><div><div class="market-symbol">${metadata.symbol}</div><div class="market-name">${metadata.koreanName}</div></div><span class="badge ${held ? "buy" : badgeClass(signal)}">${held ? "보유" : signalLabel(signal)}</span></div>
+      <div class="market-price">${quote ? formatKrw(quote.tradePrice) : "연결 대기"}</div>
+      <div class="market-score"><span>복합 점수</span><strong>${score.toFixed(2)}점</strong></div>
+      <div class="score-track"><i style="width:${Math.max(0, Math.min(100, score))}%"></i></div>
+      <div class="market-meta">${quote?.source === "rest" ? "공개 REST" : quote?.source === "offline" ? "합성 데모" : quote ? "WebSocket" : "시세 없음"}</div>
+    </button>`;
+  }).join("");
 }
 
-function renderDecisions() {
-  elements.decisionRows.innerHTML = decisions.length
-    ? decisions.slice(0, 20).map((decision) => `
-      <tr>
-        <td>${formatTime(decision.timestamp)}</td>
-        <td>${decision.signal}</td>
-        <td>${decision.fastSma == null ? "-" : formatKrw(decision.fastSma)}</td>
-        <td>${decision.slowSma == null ? "-" : formatKrw(decision.slowSma)}</td>
-        <td>${decision.reason}</td>
-      </tr>`).join("")
-    : `<tr><td colspan="5" class="empty">완료된 봉을 기다리는 중입니다.</td></tr>`;
+function renderPositions(positions) {
+  elements.positionCards.innerHTML = positions.length ? positions.map((position) => {
+    const runtime = runtimes.get(position.market);
+    const returnRate = position.costBasis > 0 ? position.unrealizedPnl / position.costBasis : 0;
+    return `<article class="list-card">
+      <div class="list-head"><div><div class="list-title">${position.symbol} · ${position.koreanName}</div><div class="list-subtitle">평균매수가 ${formatKrw(position.averageEntryPrice)}</div></div><div><strong>${formatKrw(position.marketValue)}</strong><div class="list-subtitle">${formatRate(returnRate)}</div></div></div>
+      <div class="list-metrics"><div><span>수량</span><strong>${formatQuantity(position.market, position.quantityUnits)}</strong></div><div><span>평가손익</span><strong>${formatKrw(position.unrealizedPnl)}</strong></div><div><span>매수 수수료</span><strong>${formatKrw(position.buyFee)}</strong></div><div><span>현재 점수</span><strong>${Number(runtime.latestScore?.total || 0).toFixed(2)}점</strong></div></div>
+    </article>`;
+  }).join("") : '<div class="empty-state">아직 보유 중인 코인이 없습니다.</div>';
+}
+
+function renderRankedDecisions() {
+  const ranked = rankCandidates(MARKETS.map((metadata) => ({
+    market: metadata.market,
+    score: runtimes.get(metadata.market).latestScore?.total || 0,
+    decision: runtimes.get(metadata.market).latestDecision,
+  })));
+  elements.rankedDecisions.innerHTML = ranked.map((item, index) => {
+    const metadata = MARKET_BY_CODE.get(item.market);
+    const decision = item.decision;
+    const runtime = runtimes.get(item.market);
+    return `<article class="list-card">
+      <div class="list-head"><div><span class="badge">${index + 1}위</span><div class="list-title">${metadata.symbol} · ${signalLabel(decision?.signal)}</div></div><strong>${Number(item.score || 0).toFixed(2)}점</strong></div>
+      <div class="list-subtitle">${escapeHtml(decision?.reason || "완료된 봉을 기다리는 중입니다.")}</div>
+      <div class="list-metrics"><div><span>이동평균</span><strong>${Number(runtime.latestScore?.movingAverage || 0).toFixed(2)} / 50</strong></div><div><span>상승률</span><strong>${Number(runtime.latestScore?.momentum || 0).toFixed(2)} / 30</strong></div><div><span>거래량</span><strong>${Number(runtime.latestScore?.volume || 0).toFixed(2)} / 20</strong></div></div>
+    </article>`;
+  }).join("");
+}
+
+function fillCard(fill) {
+  const metadata = MARKET_BY_CODE.get(fill.market);
+  return `<article class="fill-card">
+    <div class="fill-head"><div><div class="fill-title"><span class="badge ${fill.side === "BUY" ? "buy" : "sell"}">${fill.side === "BUY" ? "매수" : "매도"}</span> ${metadata?.symbol || fill.market}</div><div class="fill-subtitle">${formatTime(fill.timestamp)} · ${escapeHtml(fill.reason)}</div></div><strong>${formatKrw(fill.grossAmount)}</strong></div>
+    <div class="fill-grid"><div><span>체결가</span><strong>${formatKrw(fill.executionPrice)}</strong></div><div><span>수량</span><strong>${formatQuantity(fill.market, fill.quantityUnits)}</strong></div><div><span>수수료</span><strong>${formatKrw(fill.fee)}</strong></div><div><span>현금 증감</span><strong>${formatKrw(fill.cashDelta)}</strong></div><div><span>실현손익</span><strong>${formatKrw(fill.realizedPnl)}</strong></div><div><span>신호 점수</span><strong>${Number(fill.score || 0).toFixed(2)}점</strong></div></div>
+  </article>`;
+}
+
+function renderFills(container, fills) {
+  container.innerHTML = fills.length ? fills.slice(0, 30).map(fillCard).join("") : '<div class="empty-state">아직 가상 거래가 없습니다.</div>';
+}
+
+function renderDetail() {
+  const metadata = MARKET_BY_CODE.get(selectedMarket);
+  const runtime = runtimes.get(selectedMarket);
+  const quote = runtime.quote;
+  const position = portfolio.positions.get(selectedMarket);
+  const score = runtime.latestScore || emptyScore();
+  elements.selectedSymbol.textContent = metadata.symbol;
+  elements.selectedKoreanName.textContent = metadata.koreanName;
+  elements.detailPrice.textContent = quote ? formatKrw(quote.tradePrice) : "연결 대기";
+  elements.detailBestBid.textContent = quote ? formatKrw(quote.bestBid) : "-";
+  elements.detailBestAsk.textContent = quote ? formatKrw(quote.bestAsk) : "-";
+  elements.detailPosition.textContent = position ? `보유 · ${formatQuantity(selectedMarket, position.quantityUnits)}` : "미보유";
+  elements.detailScore.textContent = `${Number(score.total || 0).toFixed(2)}점`;
+  elements.detailSignal.textContent = signalLabel(runtime.latestDecision?.signal);
+  elements.scoreMa.textContent = `${Number(score.movingAverage || 0).toFixed(2)} / 50`;
+  elements.scoreMomentum.textContent = `${Number(score.momentum || 0).toFixed(2)} / 30`;
+  elements.scoreVolume.textContent = `${Number(score.volume || 0).toFixed(2)} / 20`;
+  elements.scoreMaBar.value = Number(score.movingAverage || 0);
+  elements.scoreMomentumBar.value = Number(score.momentum || 0);
+  elements.scoreVolumeBar.value = Number(score.volume || 0);
+  document.querySelectorAll("[data-market]").forEach((button) => button.classList.toggle("active", button.dataset.market === selectedMarket));
+  renderOrderPreview(metadata, quote, position);
+  renderFills(elements.detailFills, portfolio.fills.filter((fill) => fill.market === selectedMarket));
+  elements.detailDecisions.innerHTML = runtime.decisions.length ? runtime.decisions.slice(0, 20).map((decision) => `<article class="list-card"><div class="list-head"><div class="list-title">${signalLabel(decision.signal)} · ${formatTime(decision.timestamp)}</div><strong>${Number(decision.score?.total || 0).toFixed(2)}점</strong></div><div class="list-subtitle">${escapeHtml(decision.reason)}</div></article>`).join("") : '<div class="empty-state">완료된 봉을 기다리는 중입니다.</div>';
+  if (currentView === "detail") renderDetailChart();
+}
+
+function renderOrderPreview(metadata, quote, position) {
+  if (!quote) {
+    elements.orderPreview.innerHTML = '<div class="empty-state">현재 호가가 수신되면 예상 주문 비용을 표시합니다.</div>';
+    return;
+  }
+  if (position) {
+    const executionPrice = quote.bestBid * (1 - SLIPPAGE_RATE);
+    const grossAmount = Math.floor((Number(position.quantityUnits) / Number(metadata.unitsPerCoin)) * executionPrice);
+    const fee = Math.floor(grossAmount * feeRate);
+    const net = grossAmount - fee;
+    elements.orderPreview.innerHTML = `<div><span>예상 매도 체결가</span><strong>${formatKrw(executionPrice)}</strong></div><div><span>보유 수량</span><strong>${formatQuantity(metadata.market, position.quantityUnits)}</strong></div><div><span>예상 매도대금</span><strong>${formatKrw(grossAmount)}</strong></div><div><span>예상 수수료</span><strong>${formatKrw(fee)}</strong></div><div><span>예상 입금액</span><strong>${formatKrw(net)}</strong></div><div><span>설정 수수료율</span><strong>${(feeRate * 100).toFixed(2)}%</strong></div>`;
+    return;
+  }
+  try {
+    const preview = portfolio.previewBuy({ market: metadata.market, bestAsk: quote.bestAsk, maxOutflow: 20_000, feeRate, slippageRate: SLIPPAGE_RATE });
+    elements.orderPreview.innerHTML = `<div><span>총 사용 한도</span><strong>20,000원</strong></div><div><span>예상 매수 체결가</span><strong>${formatKrw(preview.executionPrice)}</strong></div><div><span>코인 매수금액</span><strong>${formatKrw(preview.grossAmount)}</strong></div><div><span>예상 수수료</span><strong>${formatKrw(preview.fee)}</strong></div><div><span>총 현금 차감</span><strong>${formatKrw(preview.cashOutflow)}</strong></div><div><span>예상 수량</span><strong>${formatQuantity(metadata.market, preview.quantityUnits)}</strong></div>`;
+  } catch (error) {
+    elements.orderPreview.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderDetailChart() {
+  const runtime = runtimes.get(selectedMarket);
+  if (!runtime || !elements.chart) return;
+  const fills = portfolio.fills.filter((fill) => fill.market === selectedMarket);
+  drawPriceChart(elements.chart, runtime.candles, fills, modeConfig());
 }
 
 function renderLogs() {
@@ -313,25 +526,48 @@ function renderLogs() {
 
 elements.startButton.addEventListener("click", () => {
   running = true;
-  addLog("모의 자동매매를 시작했습니다.");
+  addLog("멀티코인 모의 자동매매를 시작했습니다.");
   persistState();
   render();
 });
 
 elements.pauseButton.addEventListener("click", () => {
   running = false;
+  clearDecisionBuckets();
   addLog("모의 자동매매를 일시정지했습니다.");
   persistState();
   render();
 });
 
 elements.resetButton.addEventListener("click", resetAccount);
-elements.modeSelect.addEventListener("change", (event) => changeMode(event.target.value));
-elements.offlineButton.addEventListener("click", () => (offlineDemo ? stopOfflineDemo() : startOfflineDemo()));
-window.addEventListener("resize", () => drawPriceChart(elements.chart, candles, trades, config));
+elements.modeSelect.addEventListener("change", (event) => switchMode(event.target.value));
+elements.feeInput.addEventListener("change", (event) => {
+  const percent = Number(event.target.value);
+  if (!Number.isFinite(percent) || percent < 0 || percent > 1) {
+    event.target.value = (feeRate * 100).toFixed(2);
+    addLog("수수료율은 0.00% 이상 1.00% 이하로 입력해야 합니다.");
+    return;
+  }
+  feeRate = percent / 100;
+  addLog(`거래 수수료율을 ${percent.toFixed(2)}%로 변경했습니다.`);
+  persistState();
+  render();
+});
+
+elements.portfolioTab.addEventListener("click", () => showView("portfolio"));
+elements.detailTab.addEventListener("click", () => showView("detail"));
+elements.backToPortfolio.addEventListener("click", () => showView("portfolio"));
+elements.marketCards.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-market-card]");
+  if (card) selectMarket(card.dataset.marketCard, true);
+});
+document.querySelectorAll("[data-market]").forEach((button) => button.addEventListener("click", () => selectMarket(button.dataset.market, false)));
+window.addEventListener("resize", () => { if (currentView === "detail") renderDetailChart(); });
 window.addEventListener("beforeunload", persistState);
 
-addLog("GitHub Pages 모의투자 대시보드를 시작했습니다.");
+hydrateState(mode);
+addLog("멀티코인 포트폴리오 대시보드를 시작했습니다.", false);
+showView("portfolio");
 render();
-feed.connect();
-setInterval(render, 1_000);
+startDataSource();
+setInterval(() => render(), 5_000);
