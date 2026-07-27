@@ -9,8 +9,18 @@ const STORAGE_KEYS = Object.freeze({
   demo: "currencymoi.portfolio.demo.v2",
 });
 
+const ZERO_FEE_SENTINEL = Number.MIN_VALUE;
+
 function normalizeMode(mode) {
   return mode === "demo" ? "demo" : "public";
+}
+
+function normalizeFeeRate(value) {
+  const feeRate = Number(value);
+  if (!Number.isFinite(feeRate) || feeRate < 0 || feeRate > 0.01) return 0.0005;
+  // app.mjs historically resolves falsy values to the default fee. Keep an
+  // effectively-zero positive sentinel so a user-selected 0.00% survives reload.
+  return feeRate === 0 ? ZERO_FEE_SENTINEL : feeRate;
 }
 
 function emptyMarketStates() {
@@ -51,14 +61,13 @@ function normalizeVersionTwoState(value, mode) {
       lastProcessedCandle: source.lastProcessedCandle ?? null,
     };
   }
-  const feeRate = Number(value?.feeRate);
   return {
     ...fresh,
     ...value,
     version: 2,
     mode: normalizeMode(mode),
     running: false,
-    feeRate: Number.isFinite(feeRate) && feeRate >= 0 && feeRate <= 0.01 ? feeRate : 0.0005,
+    feeRate: normalizeFeeRate(value?.feeRate),
     selectedMarket: MARKETS.some(({ market }) => market === value?.selectedMarket)
       ? value.selectedMarket
       : "KRW-BTC",
