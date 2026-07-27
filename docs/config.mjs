@@ -16,3 +16,10 @@ export function strategyConfigForMode(mode = "public") {
     staleAfterMs: undefined,
   };
 }
+
+export function staleLimitForQuote(quote, requestedLimit) {
+  const sourceLimit = quote?.source === "rest" ? 35_000 : 15_000;
+  return Number.isFinite(requestedLimit)
+    ? Math.min(requestedLimit, sourceLimit)
+    : sourceLimit;
+}
