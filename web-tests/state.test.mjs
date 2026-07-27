@@ -28,6 +28,14 @@ test("public and demo modes use independent version-two storage keys", () => {
   assert.equal(loadModeState("demo", storage).feeRate, 0.0002);
 });
 
+test("zero fee remains effectively zero after the app truthy fallback", () => {
+  const storage = new MemoryStorage();
+  saveModeState("public", { ...createFreshState("public"), feeRate: 0 }, storage);
+  const restored = loadModeState("public", storage);
+  const appResolvedFeeRate = Number(restored.feeRate) || 0.0005;
+  assert.equal(Math.floor(20_000 * appResolvedFeeRate), 0);
+});
+
 test("legacy BTC position migrates into the shared portfolio and resumes paused", () => {
   const migrated = migrateLegacyState({
     mode: "normal",
