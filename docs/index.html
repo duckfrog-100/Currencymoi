@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="실시간 업비트 공개 시세를 사용하는 5만원 가상화폐 모의투자봇">
+  <meta name="theme-color" content="#090d18">
+  <title>Currencymoi · 실시간 모의투자봇</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">KRW-BTC PAPER TRADING</p>
+      <h1>Currencymoi</h1>
+      <p class="subtitle">실제 주문 없이 50,000원으로 살펴보는 실시간 모의 자동매매</p>
+    </div>
+    <a class="github-link" href="https://github.com/duckfrog-100/Currencymoi" target="_blank" rel="noreferrer">GitHub 저장소</a>
+  </header>
+
+  <main class="page-shell">
+    <section class="notice">
+      <strong>모의투자 전용</strong>
+      <span>API 키, 실제 주문, 입출금 기능이 없습니다. 이 브라우저 안에서만 가상 거래하며 결과는 localStorage에 저장됩니다.</span>
+    </section>
+
+    <section class="control-panel panel">
+      <div class="control-actions">
+        <button data-id="startButton" class="primary">▶ 시작</button>
+        <button data-id="pauseButton">Ⅱ 일시정지</button>
+        <button data-id="resetButton" class="danger-ghost">50,000원 초기화</button>
+      </div>
+      <label>
+        전략 모드
+        <select data-id="modeSelect">
+          <option value="normal">일반 · 1분봉 SMA 5/20</option>
+          <option value="demo">데모 · 5초봉 SMA 3/7</option>
+        </select>
+      </label>
+      <button data-id="offlineButton" class="secondary">오프라인 데모로 보기</button>
+    </section>
+
+    <section data-id="offlineNotice" class="offline-notice" hidden>
+      현재 네트워크에서 업비트 WebSocket 연결이 차단된 것 같습니다. 개인 네트워크에서 다시 접속하거나 오프라인 데모를 사용할 수 있습니다.
+    </section>
+
+    <section class="status-grid">
+      <article class="status-card"><span>봇 상태</span><strong data-id="botStatus">일시정지</strong></article>
+      <article class="status-card"><span>시세 연결</span><strong data-id="connectionStatus">연결 대기</strong></article>
+      <article class="status-card"><span>전략 모드</span><strong data-id="modeStatus">일반 · 1분봉</strong></article>
+      <article class="status-card"><span>현재 포지션</span><strong data-id="positionStatus">현금 보유</strong></article>
+    </section>
+
+    <section class="market-grid">
+      <article class="metric-card emphasis"><span>BTC 현재가</span><strong data-id="currentPrice">연결 대기</strong></article>
+      <article class="metric-card"><span>최우선 매수호가</span><strong data-id="bestBid">-</strong></article>
+      <article class="metric-card"><span>최우선 매도호가</span><strong data-id="bestAsk">-</strong></article>
+    </section>
+
+    <section class="asset-grid">
+      <article class="metric-card emphasis"><span>총 평가자산</span><strong data-id="totalEquity">50,000원</strong><small data-id="totalPnl">+0원</small></article>
+      <article class="metric-card"><span>보유 현금</span><strong data-id="cash">50,000원</strong></article>
+      <article class="metric-card"><span>BTC 평가금액</span><strong data-id="btcValue">0원</strong></article>
+      <article class="metric-card"><span>BTC 수량</span><strong data-id="btcQuantity">0.00000000</strong></article>
+      <article class="metric-card"><span>누적 수익률</span><strong data-id="returnRate">+0.00%</strong></article>
+      <article class="metric-card"><span>실현손익</span><strong data-id="realizedPnl">0원</strong></article>
+    </section>
+
+    <section class="decision-grid">
+      <article class="info-card"><span>최근 판단</span><p data-id="lastDecision">완료된 봉을 기다리는 중입니다.</p></article>
+      <article class="info-card"><span>최근 행동</span><p data-id="lastAction">아직 가상 거래가 없습니다.</p></article>
+    </section>
+
+    <section class="panel chart-panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">LIVE CHART</p><h2>가격·이동평균·가상 체결</h2></div>
+        <div class="legend"><span class="price">가격</span><span class="fast">단기선</span><span class="slow">장기선</span><span class="buy">매수</span><span class="sell">매도</span></div>
+      </div>
+      <canvas data-id="chart" aria-label="비트코인 가격 차트"></canvas>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading"><div><p class="eyebrow">PAPER FILLS</p><h2>가상 거래 내역</h2></div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>시간</th><th>구분</th><th>체결가</th><th>수량(BTC)</th><th>거래금액</th><th>수수료</th><th>실현손익</th></tr></thead>
+          <tbody data-id="tradeRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading"><div><p class="eyebrow">STRATEGY LOG</p><h2>이동평균 판단</h2></div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>시간</th><th>신호</th><th>단기선</th><th>장기선</th><th>판단 이유</th></tr></thead>
+          <tbody data-id="decisionRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading"><div><p class="eyebrow">SYSTEM</p><h2>실시간 로그</h2></div></div>
+      <pre data-id="logs" class="logs">시스템 로그가 여기에 표시됩니다.</pre>
+    </section>
+  </main>
+
+  <footer>
+    교육·프로토타입 목적의 모의투자 도구이며 수익을 보장하거나 투자 판단을 권유하지 않습니다.
+  </footer>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
