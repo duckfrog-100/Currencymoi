@@ -1,0 +1,46 @@
+.bootstrap-notice {
+  margin: 0 0 14px;
+  padding: 13px 16px;
+  border: 1px solid rgba(77, 163, 255, 0.38);
+  border-radius: 14px;
+  background: rgba(77, 163, 255, 0.10);
+  color: #cfe5ff;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.bootstrap-notice::before {
+  content: "점수 준비";
+  display: inline-block;
+  margin-right: 9px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(77, 163, 255, 0.18);
+  color: #8fc7ff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.bootstrap-notice[data-state="ready"] {
+  border-color: rgba(54, 211, 153, 0.36);
+  background: rgba(54, 211, 153, 0.09);
+  color: #c8f7e5;
+}
+
+.bootstrap-notice[data-state="ready"]::before {
+  content: "준비 완료";
+  background: rgba(54, 211, 153, 0.16);
+  color: #82e8bd;
+}
+
+.bootstrap-notice[data-state="warning"] {
+  border-color: rgba(245, 185, 66, 0.38);
+  background: rgba(245, 185, 66, 0.10);
+  color: #ffe5a8;
+}
+
+.bootstrap-notice[data-state="warning"]::before {
+  content: "일부 확인 필요";
+  background: rgba(245, 185, 66, 0.16);
+  color: #ffd47a;
+}
