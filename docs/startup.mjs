@@ -25,6 +25,17 @@ function setStatus(element, message, state = "loading") {
   element.dataset.state = state;
 }
 
+export function setBootstrapControls(controls, preparing) {
+  const isPreparing = Boolean(preparing);
+  if (controls?.startButton) {
+    controls.startButton.disabled = isPreparing;
+    controls.startButton.textContent = isPreparing ? "점수 준비 중" : "▶ 시작";
+  }
+  if (controls?.pauseButton) controls.pauseButton.disabled = isPreparing;
+  if (controls?.resetButton) controls.resetButton.disabled = isPreparing;
+  if (controls?.feeInput) controls.feeInput.disabled = isPreparing;
+}
+
 function hasPosition(state, market) {
   return Boolean(state?.portfolio?.positionsByMarket?.[market]);
 }
@@ -130,9 +141,16 @@ export async function prepareInitialDashboardState({
 } = {}) {
   const statusElement = documentRef?.querySelector?.("[data-id='bootstrapStatus']") || null;
   const modeSelect = documentRef?.querySelector?.("[data-id='modeSelect']") || null;
+  const controls = {
+    startButton: documentRef?.querySelector?.("[data-id='startButton']") || null,
+    pauseButton: documentRef?.querySelector?.("[data-id='pauseButton']") || null,
+    resetButton: documentRef?.querySelector?.("[data-id='resetButton']") || null,
+    feeInput: documentRef?.querySelector?.("[data-id='feeInput']") || null,
+  };
   const mode = storage?.getItem?.(LAST_MODE_KEY) === "demo" ? "demo" : "public";
 
   if (modeSelect) modeSelect.value = mode;
+  setBootstrapControls(controls, true);
 
   const reloadOnModeChange = (event) => {
     const nextMode = event.target.value === "demo" ? "demo" : "public";
@@ -152,5 +170,6 @@ export async function prepareInitialDashboardState({
     await preparePublicState({ storage, fetchImpl, statusElement, now });
   } finally {
     modeSelect?.removeEventListener?.("change", reloadOnModeChange);
+    setBootstrapControls(controls, false);
   }
 }
