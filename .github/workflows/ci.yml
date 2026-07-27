@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/paper-trading-mvp
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run Python tests
+        run: python -m pytest -q
+
+      - name: Compile Python sources
+        run: python -m compileall -q currencymoi app.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check docs/core.mjs
+          node --check docs/feed.mjs
+          node --check docs/chart.mjs
+          node --check docs/app.mjs
+
+      - name: Run browser core tests
+        run: node --test web-tests/core.test.mjs
