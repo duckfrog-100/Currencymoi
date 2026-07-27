@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   backtest:
@@ -23,13 +24,46 @@ jobs:
       - name: Install dependency
         run: pip install requests
 
-      - name: Run backtest
-        run: python scripts/backtest_last_30d.py
+      - name: Run backtest and capture status
+        shell: bash
+        run: |
+          set +e
+          python scripts/backtest_last_30d.py > backtest.log 2>&1
+          echo "$?" > backtest.status
+          cat backtest.log
+          exit 0
 
-      - name: Upload result
+      - name: Comment result or error log
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          {
+            echo '## One-off backtest output'
+            echo
+            echo '```text'
+            if [ -f backtest-result.json ]; then
+              cat backtest-result.json
+            else
+              tail -n 160 backtest.log
+            fi
+            echo '```'
+          } > backtest-comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file backtest-comment.md
+
+      - name: Upload result and log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: backtest-result
-          path: backtest-result.json
+          path: |
+            backtest-result.json
+            backtest.log
+            backtest.status
           if-no-files-found: warn
+
+      - name: Fail when backtest failed
+        if: always()
+        shell: bash
+        run: test "$(cat backtest.status)" = "0"
