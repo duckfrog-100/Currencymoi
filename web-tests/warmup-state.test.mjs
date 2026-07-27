@@ -19,7 +19,7 @@ function risingCandles(count = 21) {
   });
 }
 
-test("historical candles create a visible score and decision in saved state", () => {
+test("historical candles create a visible non-trading score and decision in saved state", () => {
   const state = createFreshState("public");
   const next = applyMarketWarmup(state, "KRW-BTC", risingCandles(), { hasPosition: false });
   const marketState = next.markets["KRW-BTC"];
@@ -27,8 +27,10 @@ test("historical candles create a visible score and decision in saved state", ()
   assert.equal(marketState.candles.length, 21);
   assert.equal(marketState.decisions.length, 1);
   assert.equal(marketState.decisions[0].market, "KRW-BTC");
+  assert.equal(marketState.decisions[0].signal, "HOLD");
   assert.ok(marketState.decisions[0].score.total > 0);
   assert.match(marketState.decisions[0].reason, /과거 1분봉/);
+  assert.match(marketState.decisions[0].reason, /실제 거래에 사용하지 않습니다/);
 });
 
 test("fresh 21-candle history is reused but stale history refreshes", () => {
