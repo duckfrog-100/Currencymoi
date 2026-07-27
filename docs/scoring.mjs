@@ -30,19 +30,28 @@ export function scoreCandidate({ candles, fastSma, slowSma }) {
   const latestVolume = Math.max(0, Number(latest?.volume) || 0);
   const volumeRatio = averageVolume > 0 ? latestVolume / averageVolume : 0;
   const volume = clamp((volumeRatio - 1) / 2, 0, 1) * 20;
+  const rankingValue = movingAverage + momentum + volume;
 
   return {
-    total: round2(movingAverage + momentum + volume),
+    total: round2(rankingValue),
+    rankingValue,
     movingAverage: round2(movingAverage),
     momentum: round2(momentum),
     volume: round2(volume),
   };
 }
 
+function rankingScore(candidate) {
+  if (candidate?.score && typeof candidate.score === "object") {
+    return Number(candidate.score.rankingValue ?? candidate.score.total ?? 0) || 0;
+  }
+  return Number(candidate?.score ?? 0) || 0;
+}
+
 export function rankCandidates(candidates) {
   return [...(candidates || [])].sort((left, right) => {
-    const leftScore = Number(left.score?.total ?? left.score ?? 0);
-    const rightScore = Number(right.score?.total ?? right.score ?? 0);
+    const leftScore = rankingScore(left);
+    const rightScore = rankingScore(right);
     if (rightScore !== leftScore) return rightScore - leftScore;
     const leftOrder = MARKET_BY_CODE.get(left.market)?.tieBreakIndex ?? Number.MAX_SAFE_INTEGER;
     const rightOrder = MARKET_BY_CODE.get(right.market)?.tieBreakIndex ?? Number.MAX_SAFE_INTEGER;
