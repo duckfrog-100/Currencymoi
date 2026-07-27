@@ -37,9 +37,11 @@ export function applyMarketWarmup(state, market, candles, {
   const symbol = MARKET_BY_CODE.get(market)?.symbol || market;
   const decision = {
     ...evaluated,
+    signal: "HOLD",
+    observedSignal: evaluated.signal,
     market,
     score,
-    reason: `${sourceLabel} ${candles.length}개로 초기 점수를 계산했습니다. ${evaluated.reason.replaceAll("BTC", symbol)}`,
+    reason: `${sourceLabel} ${candles.length}개로 초기 점수를 계산했습니다. 이 초기 판단은 실제 거래에 사용하지 않습니다. ${evaluated.reason.replaceAll("BTC", symbol)}`,
     warmup: true,
   };
 
