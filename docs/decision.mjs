@@ -70,9 +70,7 @@ export function processDecisionBatch({
 
   for (const decision of fresh.filter((item) => item.signal === "SELL")) executeSell(decision);
 
-  const buyCandidates = fresh
-    .filter((item) => item.signal === "BUY")
-    .map((item) => ({ ...item, score: scoreValue(item) }));
+  const buyCandidates = fresh.filter((item) => item.signal === "BUY");
 
   for (const decision of rankCandidates(buyCandidates)) {
     if (portfolio.positions.size >= 2) {
@@ -94,7 +92,7 @@ export function processDecisionBatch({
         timestamp: now,
         candleStart: decision.candleStart,
         reason: decision.reason,
-        score: decision.score,
+        score: scoreValue(decision),
       }));
     } catch (error) {
       skipped.push({ market: decision.market, reason: error.message });
