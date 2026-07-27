@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="실시간 업비트 공개 시세를 사용하는 5만원 가상화폐 모의투자봇">
+  <meta name="description" content="업비트 공개 시세로 BTC·ETH·XRP·SOL·DOGE를 거래하는 5만원 멀티코인 모의투자 포트폴리오">
   <meta name="theme-color" content="#090d18">
-  <title>Currencymoi · 실시간 모의투자봇</title>
+  <title>Currencymoi · 멀티코인 모의투자</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <header class="topbar">
     <div>
-      <p class="eyebrow">KRW-BTC PAPER TRADING</p>
+      <p class="eyebrow">MULTI-COIN PAPER TRADING</p>
       <h1>Currencymoi</h1>
-      <p class="subtitle">실제 주문 없이 50,000원으로 살펴보는 실시간 모의 자동매매</p>
+      <p class="subtitle">실제 주문 없이 공동 50,000원으로 5개 코인을 비교하고 모의 매매합니다.</p>
     </div>
     <a class="github-link" href="https://github.com/duckfrog-100/Currencymoi" target="_blank" rel="noreferrer">GitHub 저장소</a>
   </header>
@@ -21,82 +21,128 @@
   <main class="page-shell">
     <section class="notice">
       <strong>모의투자 전용</strong>
-      <span>API 키, 실제 주문, 입출금 기능이 없습니다. 이 브라우저 안에서만 가상 거래하며 결과는 localStorage에 저장됩니다.</span>
+      <span>API 키·실제 주문·입출금 기능이 없습니다. 공개 시세와 이 브라우저의 localStorage만 사용합니다.</span>
     </section>
+
+    <nav class="view-tabs panel" aria-label="대시보드 화면">
+      <button data-id="portfolioTab" class="view-tab active" type="button">포트폴리오</button>
+      <button data-id="detailTab" class="view-tab" type="button">코인 상세</button>
+      <span class="view-rule">공동 50,000원 · 최대 2종 · 종목당 20,000원</span>
+    </nav>
 
     <section class="control-panel panel">
       <div class="control-actions">
-        <button data-id="startButton" class="primary">▶ 시작</button>
-        <button data-id="pauseButton">Ⅱ 일시정지</button>
-        <button data-id="resetButton" class="danger-ghost">50,000원 초기화</button>
+        <button data-id="startButton" class="primary" type="button">▶ 시작</button>
+        <button data-id="pauseButton" type="button">Ⅱ 일시정지</button>
+        <button data-id="resetButton" class="danger-ghost" type="button">50,000원 초기화</button>
       </div>
       <label>
-        전략 모드
+        데이터·전략 모드
         <select data-id="modeSelect">
-          <option value="normal">일반 · 1분봉 SMA 5/20</option>
-          <option value="demo">데모 · 5초봉 SMA 3/7</option>
+          <option value="public">공개 시세 · 1분봉 SMA 5/20</option>
+          <option value="demo">오프라인 데모 · 5초봉 SMA 3/7</option>
         </select>
       </label>
-      <button data-id="offlineButton" class="secondary">오프라인 데모로 보기</button>
+      <label class="fee-control">
+        거래 수수료
+        <span class="input-suffix"><input data-id="feeInput" type="number" min="0" max="1" step="0.01" inputmode="decimal"><span>%</span></span>
+      </label>
     </section>
 
     <section data-id="offlineNotice" class="offline-notice" hidden>
-      브라우저 WebSocket 연결이 어려워 업비트 공개 호가 API의 약 10초 갱신 방식으로 자동 전환합니다. 이 값도 실제 업비트 공개 시세이며, 오프라인 데모와는 다릅니다.
+      WebSocket 연결이 어려워 5개 마켓 공개 시세를 약 21초 간격의 배치 REST 조회로 전환했습니다. 합성 데모 가격이 아닙니다.
     </section>
 
     <section class="status-grid">
       <article class="status-card"><span>봇 상태</span><strong data-id="botStatus">일시정지</strong></article>
       <article class="status-card"><span>시세 연결</span><strong data-id="connectionStatus">연결 대기</strong></article>
-      <article class="status-card"><span>전략 모드</span><strong data-id="modeStatus">일반 · 1분봉</strong></article>
-      <article class="status-card"><span>현재 포지션</span><strong data-id="positionStatus">현금 보유</strong></article>
+      <article class="status-card"><span>전략 모드</span><strong data-id="modeStatus">공개 · 1분봉</strong></article>
+      <article class="status-card"><span>감시 종목</span><strong>BTC · ETH · XRP · SOL · DOGE</strong></article>
     </section>
 
-    <section class="market-grid">
-      <article class="metric-card emphasis"><span>BTC 현재가</span><strong data-id="currentPrice">연결 대기</strong></article>
-      <article class="metric-card"><span>최우선 매수호가</span><strong data-id="bestBid">-</strong></article>
-      <article class="metric-card"><span>최우선 매도호가</span><strong data-id="bestAsk">-</strong></article>
+    <section data-id="portfolioView">
+      <section class="summary-grid">
+        <article class="metric-card emphasis"><span>총 평가자산</span><strong data-id="totalEquity">50,000원</strong><small data-id="totalPnl">+0원 · +0.00%</small></article>
+        <article class="metric-card"><span>보유 현금</span><strong data-id="cash">50,000원</strong><small>최소 10,000원 유지</small></article>
+        <article class="metric-card"><span>보유 종목</span><strong data-id="positionCount">0 / 2</strong><small>최대 동시 보유 수</small></article>
+        <article class="metric-card"><span>누적 수수료</span><strong data-id="cumulativeFees">0원</strong><small>매수·매도 합계</small></article>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">MARKET RANKING</p><h2>5개 코인 감시 현황</h2></div>
+          <p class="section-copy">이동평균 50점 + 최근 상승률 30점 + 거래량 증가 20점</p>
+        </div>
+        <div data-id="marketCards" class="market-strip" aria-live="polite"></div>
+      </section>
+
+      <section class="two-column">
+        <section class="panel">
+          <div class="section-heading"><div><p class="eyebrow">OPEN POSITIONS</p><h2>현재 보유</h2></div><span class="muted">종목당 수수료 포함 20,000원</span></div>
+          <div data-id="positionCards" class="stack-list"></div>
+        </section>
+        <section class="panel">
+          <div class="section-heading"><div><p class="eyebrow">DECISION QUEUE</p><h2>최근 전략 순위</h2></div><span class="muted">매도 우선 · 점수순 매수</span></div>
+          <div data-id="rankedDecisions" class="stack-list"></div>
+        </section>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading"><div><p class="eyebrow">ALL PAPER FILLS</p><h2>전체 가상 거래 내역</h2></div></div>
+        <div data-id="combinedFills" class="fill-list"></div>
+      </section>
     </section>
 
-    <section class="asset-grid">
-      <article class="metric-card emphasis"><span>총 평가자산</span><strong data-id="totalEquity">50,000원</strong><small data-id="totalPnl">+0원</small></article>
-      <article class="metric-card"><span>보유 현금</span><strong data-id="cash">50,000원</strong></article>
-      <article class="metric-card"><span>BTC 평가금액</span><strong data-id="btcValue">0원</strong></article>
-      <article class="metric-card"><span>BTC 수량</span><strong data-id="btcQuantity">0.00000000</strong></article>
-      <article class="metric-card"><span>누적 수익률</span><strong data-id="returnRate">+0.00%</strong></article>
-      <article class="metric-card"><span>실현손익</span><strong data-id="realizedPnl">0원</strong></article>
-    </section>
+    <section data-id="detailView" hidden>
+      <section class="panel detail-nav">
+        <button class="back-button" data-id="backToPortfolio" type="button">← 포트폴리오</button>
+        <div class="coin-tabs" aria-label="상세 코인 선택">
+          <button type="button" data-market="KRW-BTC">BTC</button>
+          <button type="button" data-market="KRW-ETH">ETH</button>
+          <button type="button" data-market="KRW-XRP">XRP</button>
+          <button type="button" data-market="KRW-SOL">SOL</button>
+          <button type="button" data-market="KRW-DOGE">DOGE</button>
+        </div>
+      </section>
 
-    <section class="decision-grid">
-      <article class="info-card"><span>최근 판단</span><p data-id="lastDecision">완료된 봉을 기다리는 중입니다.</p></article>
-      <article class="info-card"><span>최근 행동</span><p data-id="lastAction">아직 가상 거래가 없습니다.</p></article>
-    </section>
+      <section class="detail-heading">
+        <div><p class="eyebrow">SELECTED MARKET</p><h2><span data-id="selectedSymbol">BTC</span> <small data-id="selectedKoreanName">비트코인</small></h2></div>
+      </section>
 
-    <section class="panel chart-panel">
-      <div class="section-heading">
-        <div><p class="eyebrow">LIVE CHART</p><h2>가격·이동평균·가상 체결</h2></div>
-        <div class="legend"><span class="price">가격</span><span class="fast">단기선</span><span class="slow">장기선</span><span class="buy">매수</span><span class="sell">매도</span></div>
-      </div>
-      <canvas data-id="chart" aria-label="비트코인 가격 차트"></canvas>
-    </section>
+      <section class="detail-metrics">
+        <article class="metric-card emphasis"><span>현재가</span><strong data-id="detailPrice">연결 대기</strong></article>
+        <article class="metric-card"><span>최우선 매수호가</span><strong data-id="detailBestBid">-</strong></article>
+        <article class="metric-card"><span>최우선 매도호가</span><strong data-id="detailBestAsk">-</strong></article>
+        <article class="metric-card"><span>포지션</span><strong data-id="detailPosition">미보유</strong></article>
+        <article class="metric-card"><span>복합 점수</span><strong data-id="detailScore">0점</strong></article>
+        <article class="metric-card"><span>현재 판단</span><strong data-id="detailSignal">대기</strong></article>
+      </section>
 
-    <section class="panel">
-      <div class="section-heading"><div><p class="eyebrow">PAPER FILLS</p><h2>가상 거래 내역</h2></div></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>시간</th><th>구분</th><th>체결가</th><th>수량(BTC)</th><th>거래금액</th><th>수수료</th><th>실현손익</th></tr></thead>
-          <tbody data-id="tradeRows"></tbody>
-        </table>
-      </div>
-    </section>
+      <section class="panel chart-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">PRICE · SMA · FILLS</p><h2>선택 코인 가격 흐름</h2></div>
+          <div class="legend"><span class="price">가격</span><span class="fast">단기선</span><span class="slow">장기선</span><span class="buy">매수</span><span class="sell">매도</span></div>
+        </div>
+        <canvas data-id="chart" aria-label="선택 코인의 가격과 이동평균 차트"></canvas>
+      </section>
 
-    <section class="panel">
-      <div class="section-heading"><div><p class="eyebrow">STRATEGY LOG</p><h2>이동평균 판단</h2></div></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>시간</th><th>신호</th><th>단기선</th><th>장기선</th><th>판단 이유</th></tr></thead>
-          <tbody data-id="decisionRows"></tbody>
-        </table>
-      </div>
+      <section class="two-column detail-analysis">
+        <section class="panel">
+          <div class="section-heading"><div><p class="eyebrow">COMPOSITE SCORE</p><h2>점수 구성</h2></div></div>
+          <div class="score-row"><div><span>이동평균 돌파 강도</span><strong data-id="scoreMa">0 / 50</strong></div><progress data-id="scoreMaBar" max="50" value="0"></progress></div>
+          <div class="score-row"><div><span>최근 가격 상승률</span><strong data-id="scoreMomentum">0 / 30</strong></div><progress data-id="scoreMomentumBar" max="30" value="0"></progress></div>
+          <div class="score-row"><div><span>거래량 증가율</span><strong data-id="scoreVolume">0 / 20</strong></div><progress data-id="scoreVolumeBar" max="20" value="0"></progress></div>
+        </section>
+        <section class="panel">
+          <div class="section-heading"><div><p class="eyebrow">ORDER PREVIEW</p><h2>가상 주문 계산</h2></div></div>
+          <div data-id="orderPreview" class="preview-grid"></div>
+        </section>
+      </section>
+
+      <section class="two-column">
+        <section class="panel"><div class="section-heading"><div><p class="eyebrow">MARKET FILLS</p><h2>선택 코인 거래</h2></div></div><div data-id="detailFills" class="fill-list"></div></section>
+        <section class="panel"><div class="section-heading"><div><p class="eyebrow">MARKET DECISIONS</p><h2>선택 코인 판단</h2></div></div><div data-id="detailDecisions" class="stack-list"></div></section>
+      </section>
     </section>
 
     <section class="panel">
@@ -105,9 +151,7 @@
     </section>
   </main>
 
-  <footer>
-    교육·프로토타입 목적의 모의투자 도구이며 수익을 보장하거나 투자 판단을 권유하지 않습니다.
-  </footer>
+  <footer>교육·프로토타입 목적의 모의투자 도구이며 수익을 보장하거나 투자 판단을 권유하지 않습니다.</footer>
   <script type="module" src="./app.mjs"></script>
 </body>
 </html>
