@@ -1,3 +1,20 @@
+export function normalizeRestOrderbook(payload, fallbackTimestamp = Date.now()) {
+  const item = Array.isArray(payload) ? payload[0] : null;
+  const unit = item?.orderbook_units?.[0];
+  const bestBid = Number(unit?.bid_price);
+  const bestAsk = Number(unit?.ask_price);
+  if (!(bestBid > 0) || !(bestAsk > 0) || bestBid > bestAsk) {
+    throw new Error("유효한 최우선 호가가 없습니다.");
+  }
+  return {
+    timestamp: Number(item.timestamp || fallbackTimestamp),
+    tradePrice: Math.round((bestBid + bestAsk) / 2),
+    bestBid,
+    bestAsk,
+    source: "rest",
+  };
+}
+
 export class UpbitBrowserFeed {
   constructor({ market, onSnapshot, onTrade, onEvent, onStatus, onBlocked }) {
     this.market = market;
@@ -8,6 +25,9 @@ export class UpbitBrowserFeed {
     this.onBlocked = onBlocked;
     this.socket = null;
     this.reconnectTimer = null;
+    this.restStartTimer = null;
+    this.restInterval = null;
+    this.restConnected = false;
     this.manualClose = false;
     this.failedAttempts = 0;
     this.tradePrice = null;
@@ -17,14 +37,24 @@ export class UpbitBrowserFeed {
 
   connect() {
     if (this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
+    this.stopRestFallback();
     this.manualClose = false;
     this.onStatus("실시간 연결 중");
-    const socket = new WebSocket("wss://api.upbit.com/websocket/v1");
+
+    let socket;
+    try {
+      socket = new WebSocket("wss://api.upbit.com/websocket/v1");
+    } catch (error) {
+      this.onEvent(`업비트 WebSocket 연결을 시작하지 못했습니다: ${error.message}`);
+      this.handleWebSocketClose();
+      return;
+    }
     socket.binaryType = "arraybuffer";
     this.socket = socket;
 
     socket.addEventListener("open", () => {
       this.failedAttempts = 0;
+      this.restConnected = false;
       this.onStatus("실시간 연결됨");
       const ticket = globalThis.crypto?.randomUUID?.() || `currencymoi-${Date.now()}`;
       socket.send(JSON.stringify([
@@ -63,18 +93,79 @@ export class UpbitBrowserFeed {
     socket.addEventListener("close", () => {
       this.socket = null;
       if (this.manualClose) return;
-      this.failedAttempts += 1;
-      this.onStatus("재연결 대기");
-      this.onEvent("시세 연결이 종료되어 10초 후 재연결합니다.");
-      if (this.failedAttempts >= 2) this.onBlocked();
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = setTimeout(() => this.connect(), 10_000);
+      this.handleWebSocketClose();
     });
+  }
+
+  handleWebSocketClose() {
+    this.failedAttempts += 1;
+    clearTimeout(this.reconnectTimer);
+    if (this.failedAttempts >= 2) {
+      this.onBlocked();
+      this.startRestFallback();
+      return;
+    }
+    this.onStatus("재연결 대기");
+    this.onEvent("시세 연결이 종료되어 10초 후 한 번 더 연결합니다.");
+    this.reconnectTimer = setTimeout(() => this.connect(), 10_500);
+  }
+
+  startRestFallback() {
+    if (this.restStartTimer || this.restInterval) return;
+    clearTimeout(this.reconnectTimer);
+    this.onStatus("공개 시세 전환 대기");
+    this.onEvent("WebSocket 연결이 어려워 업비트 공개 호가 API의 10초 갱신 방식으로 전환합니다.");
+    this.restStartTimer = setTimeout(async () => {
+      this.restStartTimer = null;
+      await this.pollRestOnce();
+      if (!this.manualClose) {
+        this.restInterval = setInterval(() => this.pollRestOnce(), 10_500);
+      }
+    }, 10_500);
+  }
+
+  async pollRestOnce() {
+    if (this.manualClose) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+    try {
+      const url = `https://api.upbit.com/v1/orderbook?markets=${encodeURIComponent(this.market)}&count=1`;
+      const response = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const snapshot = normalizeRestOrderbook(await response.json());
+      this.onSnapshot(snapshot);
+      this.onTrade(snapshot.timestamp, snapshot.tradePrice, 0);
+      this.onStatus("공개 시세 · 10초 갱신");
+      if (!this.restConnected) {
+        this.restConnected = true;
+        this.onEvent("업비트 공개 호가 API에 연결되었습니다. 실제 공개 시세를 약 10초마다 갱신합니다.");
+      }
+    } catch (error) {
+      this.onStatus("공개 시세 연결 오류");
+      this.onEvent(`공개 시세 조회 오류: ${error.name === "AbortError" ? "응답 시간 초과" : error.message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  stopRestFallback() {
+    clearTimeout(this.restStartTimer);
+    clearInterval(this.restInterval);
+    this.restStartTimer = null;
+    this.restInterval = null;
+    this.restConnected = false;
   }
 
   disconnect() {
     this.manualClose = true;
     clearTimeout(this.reconnectTimer);
+    this.stopRestFallback();
     this.socket?.close();
     this.socket = null;
   }
@@ -112,6 +203,7 @@ export class UpbitBrowserFeed {
       tradePrice: this.tradePrice,
       bestBid: this.bestBid,
       bestAsk: this.bestAsk,
+      source: "websocket",
     });
   }
 }

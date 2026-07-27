@@ -102,7 +102,13 @@ function formatTime(timestamp) {
 
 function processMarketSnapshot(snapshot) {
   market = snapshot;
-  connectionStatus = offlineDemo ? "오프라인 데모" : "실시간 연결됨";
+  if (offlineDemo || snapshot.source === "offline") {
+    connectionStatus = "오프라인 데모";
+  } else if (snapshot.source === "rest") {
+    connectionStatus = "공개 시세 · 10초 갱신";
+  } else {
+    connectionStatus = "실시간 연결됨";
+  }
 }
 
 function processTradeTick(timestamp, price, volume) {
@@ -169,6 +175,7 @@ const feed = new UpbitBrowserFeed({
   onEvent: addLog,
   onStatus: (status) => {
     connectionStatus = status;
+    if (status === "실시간 연결됨") elements.offlineNotice.hidden = true;
     render();
   },
   onBlocked: () => {
@@ -194,6 +201,7 @@ function startOfflineDemo() {
       tradePrice: syntheticPrice,
       bestBid: syntheticPrice - 1_000,
       bestAsk: syntheticPrice + 1_000,
+      source: "offline",
     });
     processTradeTick(timestamp, syntheticPrice, Math.random() * 0.001);
   }, 1_000);
@@ -205,6 +213,7 @@ function stopOfflineDemo() {
   clearInterval(demoTimer);
   demoTimer = null;
   market = null;
+  elements.offlineNotice.hidden = true;
   connectionStatus = "실시간 연결 중";
   addLog("오프라인 데모를 종료하고 실제 공개 시세 연결을 시도합니다.");
   feed.connect();
@@ -263,7 +272,7 @@ function render() {
   elements.startButton.disabled = running;
   elements.pauseButton.disabled = !running;
   elements.modeSelect.value = mode;
-  elements.offlineButton.textContent = offlineDemo ? "실시간 시세 다시 연결" : "오프라인 데모로 보기";
+  elements.offlineButton.textContent = offlineDemo ? "실제 공개 시세 다시 연결" : "오프라인 데모로 보기";
   renderTrades();
   renderDecisions();
   renderLogs();
