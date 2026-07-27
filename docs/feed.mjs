@@ -29,14 +29,18 @@ export function normalizeRestOrderbooks(payload, fallbackTimestamp = Date.now())
 }
 
 export function normalizeRestOrderbook(payload, fallbackTimestamp = Date.now()) {
-  const normalized = normalizeRestOrderbooks(payload, fallbackTimestamp);
-  const first = normalized.values().next().value;
-  if (!first) throw new Error("유효한 최우선 호가가 없습니다.");
+  const item = Array.isArray(payload) ? payload[0] : null;
+  const unit = item?.orderbook_units?.[0];
+  const bestBid = Number(unit?.bid_price);
+  const bestAsk = Number(unit?.ask_price);
+  if (!(bestBid > 0) || !(bestAsk > 0) || bestBid > bestAsk) {
+    throw new Error("유효한 최우선 호가가 없습니다.");
+  }
   return {
-    timestamp: first.timestamp,
-    tradePrice: Math.round((first.bestBid + first.bestAsk) / 2),
-    bestBid: first.bestBid,
-    bestAsk: first.bestAsk,
+    timestamp: Number(item.timestamp || fallbackTimestamp),
+    tradePrice: Math.round((bestBid + bestAsk) / 2),
+    bestBid,
+    bestAsk,
     source: "rest",
   };
 }
