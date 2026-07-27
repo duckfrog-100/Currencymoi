@@ -1,9 +1,7 @@
 name: One-off 30-day backtest
 
 on:
-  push:
-    branches:
-      - analysis/backtest-2026-06-27-2026-07-27
+  pull_request:
   workflow_dispatch:
 
 permissions:
