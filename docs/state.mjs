@@ -140,28 +140,37 @@ export function saveModeState(mode, state, storage = globalThis.localStorage) {
 
 export function loadModeState(mode, storage = globalThis.localStorage) {
   if (!storage?.getItem || !storage?.setItem) return createFreshState(mode);
-  const key = storageKeyForMode(mode);
+  const normalizedMode = normalizeMode(mode);
+  const key = storageKeyForMode(normalizedMode);
   const currentRaw = storage.getItem(key);
   if (currentRaw) {
     try {
       const parsed = JSON.parse(currentRaw);
       if (parsed?.version !== 2) throw new Error("지원하지 않는 상태 버전입니다.");
-      return normalizeVersionTwoState(parsed, mode);
+      return normalizeVersionTwoState(parsed, normalizedMode);
     } catch {
       storage.setItem(`${key}.backup`, currentRaw);
-      const fresh = createFreshState(mode);
+      const fresh = createFreshState(normalizedMode);
       storage.setItem(key, JSON.stringify(fresh));
       return fresh;
     }
   }
 
-  if (normalizeMode(mode) === "public") {
+  if (normalizedMode === "public") {
     const legacyRaw = storage.getItem(LEGACY_STORAGE_KEY);
     if (legacyRaw) {
       try {
         const migrated = migrateLegacyState(JSON.parse(legacyRaw));
-        storage.setItem(key, JSON.stringify(migrated));
-        return migrated;
+        const migratedMode = normalizeMode(migrated.mode);
+        const normalizedMigrated = normalizeVersionTwoState(migrated, migratedMode);
+        storage.setItem(storageKeyForMode(migratedMode), JSON.stringify(normalizedMigrated));
+        storage.removeItem?.(LEGACY_STORAGE_KEY);
+
+        if (migratedMode === "public") return normalizedMigrated;
+
+        const freshPublic = createFreshState("public");
+        storage.setItem(key, JSON.stringify(freshPublic));
+        return freshPublic;
       } catch {
         storage.setItem(LEGACY_BACKUP_KEY, legacyRaw);
         const fresh = createFreshState("public");
@@ -171,7 +180,7 @@ export function loadModeState(mode, storage = globalThis.localStorage) {
     }
   }
 
-  const fresh = createFreshState(mode);
+  const fresh = createFreshState(normalizedMode);
   storage.setItem(key, JSON.stringify(fresh));
   return fresh;
 }
