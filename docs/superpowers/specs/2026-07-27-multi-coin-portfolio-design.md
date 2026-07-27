@@ -23,6 +23,27 @@ The product remains paper-trading only. It must not contain API keys, authentica
 - Minimum remaining cash after a buy: 10,000 KRW
 - Minimum simulated order value: 5,000 KRW
 
+### Strategy modes
+
+#### Public-market mode
+
+- Uses actual public Upbit quotation data
+- Candle interval: 60 seconds
+- Fast SMA: 5 completed candles
+- Slow SMA: 20 completed candles
+- Composite scores and fills are calculated only after enough completed candles exist
+
+#### Offline demo mode
+
+- Uses clearly labeled synthetic prices
+- Candle interval: 5 seconds
+- Fast SMA: 3 completed candles
+- Slow SMA: 7 completed candles
+- Uses the same five markets, shared-wallet limits, fees, ranking rules, and UI
+- Uses a separate localStorage state namespace so synthetic fills never alter public-market results
+
+Changing between public-market and offline-demo modes pauses automation before switching state.
+
 ### Fees and execution
 
 - Default fee rate: 0.05 percent
@@ -101,7 +122,7 @@ The portfolio view is the default screen and contains:
 - Remaining cash
 - Position count, shown as `0/2`, `1/2`, or `2/2`
 - Cumulative fees
-- Start, pause, reset, fee-rate setting, and data-source status
+- Start, pause, reset, fee-rate setting, mode setting, and data-source status
 - Five market cards showing current price, position status, composite score, and current signal
 - Current-position cards showing quantity, average entry, market value, unrealized PnL, return, buy fee, and current score
 - Ranked strategy decisions with component-score explanations
@@ -143,6 +164,8 @@ Use one public Upbit WebSocket connection for all five markets. Subscribe in one
 
 Normalize every event by market code and route it to that market's candle builder, quote snapshot, and UI card.
 
+A WebSocket quote is stale after 15 seconds without a valid update. A stale market remains visible but cannot produce a simulated fill.
+
 ### Browser REST fallback
 
 Browser requests include an Origin header and share a one-request-per-ten-seconds quotation limit. The fallback therefore uses one batch request at a time and includes all five markets in each request.
@@ -158,6 +181,8 @@ Each endpoint is therefore refreshed about every 21 seconds while the overall br
 - Ticker supplies trade price and cumulative 24-hour volume.
 - Volume deltas between ticker snapshots provide an approximate interval volume in REST fallback mode.
 - The UI labels this mode `공개 시세 · 약 21초 갱신`.
+- A REST quote becomes stale after 35 seconds.
+- A composite score may use the most recent valid orderbook and ticker snapshots only while both remain within the REST stale threshold.
 - Demo mode remains clearly labeled synthetic data and must never be shown as exchange data.
 
 If either batch response omits a market, that market is marked unavailable and cannot produce a simulated order until current price, bid, and ask are all present.
@@ -168,6 +193,8 @@ If either batch response omits a market, that market is marked unavailable and c
 
 ```text
 PortfolioState
+- version
+- mode
 - startingCashKrw
 - cashKrw
 - feeRate
@@ -218,12 +245,15 @@ MarketRuntime
 
 The existing single-coin localStorage payload is version 1. The multi-coin payload becomes version 2.
 
+Use separate keys for public-market and offline-demo portfolios.
+
 On first load after deployment:
 
 - If no position exists, migrate cash, fills, logs, and settings where possible.
-- If a legacy BTC position exists, migrate it into `positionsByMarket["KRW-BTC"]`.
+- If a legacy BTC position exists, migrate it into `positionsByMarket["KRW-BTC"]` in the public-market portfolio.
 - The migrated bot always starts paused.
 - If legacy data cannot be safely parsed, preserve it under a backup key and initialize a fresh 50,000 KRW portfolio instead of partially corrupting state.
+- Offline-demo state starts fresh and never imports a public-market position.
 
 ## 6. Trading Engine Boundaries
 
@@ -247,7 +277,7 @@ Existing generic candle and moving-average functions stay in `core.mjs` where pr
 - Never buy a market already held.
 - Never sell more than the full simulated position quantity.
 - Process one fill per market per completed candle at most.
-- Pause automation after reload, migration, reset, or unrecoverable persistence failure.
+- Pause automation after reload, migration, reset, mode switch, or unrecoverable persistence failure.
 - Show which data source is active: WebSocket, public REST fallback, or offline demo.
 - Store no API keys, credentials, personal data, or server-side state.
 
@@ -267,6 +297,7 @@ Existing generic candle and moving-average functions stay in `core.mjs` where pr
 - Duplicate fills for one market and candle are blocked
 - Quantity precision is preserved through JSON serialization
 - Version-1 BTC state migrates to version 2
+- Public-market and offline-demo state remain isolated
 
 ### Feed tests
 
@@ -276,12 +307,14 @@ Existing generic candle and moving-average functions stay in `core.mjs` where pr
 - Batch ticker normalization handles five markets
 - REST fallback alternates requests without exceeding one request per 10 seconds
 - Missing or invalid market responses disable only the affected market
+- WebSocket and REST stale thresholds block fills correctly
 
 ### UI checks
 
 - Portfolio and detail navigation works on desktop and mobile
 - Market-card selection opens the matching detail tab
 - Fee-rate changes immediately update order previews and persist
+- Mode switching pauses the bot and loads the matching isolated portfolio
 - Mobile view has no page-level horizontal overflow
 - Real, fallback, and synthetic data sources are visibly distinguishable
 
