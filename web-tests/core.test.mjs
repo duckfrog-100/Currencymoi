@@ -8,6 +8,7 @@ import {
   Signal,
   configForMode,
 } from "../docs/core.mjs";
+import { normalizeRestOrderbook } from "../docs/feed.mjs";
 
 test("normal and demo modes keep the 50,000 won wallet", () => {
   const normal = configForMode("normal");
@@ -79,4 +80,28 @@ test("portfolio JSON round-trip preserves satoshis", () => {
   const restored = Portfolio.fromJSON(JSON.parse(JSON.stringify(portfolio.toJSON())));
   assert.equal(restored.btcSats, 39_972n);
   assert.equal(restored.cash, 10_000);
+});
+
+test("REST orderbook response becomes a real public market snapshot", () => {
+  const snapshot = normalizeRestOrderbook([
+    {
+      timestamp: 1_785_110_400_000,
+      orderbook_units: [{ bid_price: 99_999_000, ask_price: 100_001_000 }],
+    },
+  ]);
+  assert.deepEqual(snapshot, {
+    timestamp: 1_785_110_400_000,
+    tradePrice: 100_000_000,
+    bestBid: 99_999_000,
+    bestAsk: 100_001_000,
+    source: "rest",
+  });
+});
+
+test("REST fallback rejects malformed or crossed orderbooks", () => {
+  assert.throws(() => normalizeRestOrderbook([]), /유효한 최우선 호가/);
+  assert.throws(
+    () => normalizeRestOrderbook([{ orderbook_units: [{ bid_price: 101, ask_price: 100 }] }]),
+    /유효한 최우선 호가/,
+  );
 });
