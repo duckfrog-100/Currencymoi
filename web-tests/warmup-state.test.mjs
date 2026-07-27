@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createFreshState } from "../docs/state.mjs";
+import { setBootstrapControls } from "../docs/startup.mjs";
 import { applyMarketWarmup, historyNeedsRefresh } from "../docs/warmup-state.mjs";
 
 function risingCandles(count = 21) {
@@ -39,4 +40,27 @@ test("fresh 21-candle history is reused but stale history refreshes", () => {
   assert.equal(historyNeedsRefresh(fresh, { now, maximumAgeMs: 10 * 60_000 }), false);
   assert.equal(historyNeedsRefresh(fresh.map((candle) => ({ ...candle, startTime: candle.startTime - 60 * 60_000 })), { now, maximumAgeMs: 10 * 60_000 }), true);
   assert.equal(historyNeedsRefresh(fresh.slice(0, 20), { now }), true);
+});
+
+test("start and reset controls are visibly disabled while scores prepare", () => {
+  const controls = {
+    startButton: { disabled: false, textContent: "▶ 시작" },
+    pauseButton: { disabled: false },
+    resetButton: { disabled: false },
+    feeInput: { disabled: false },
+  };
+
+  setBootstrapControls(controls, true);
+  assert.equal(controls.startButton.disabled, true);
+  assert.equal(controls.startButton.textContent, "점수 준비 중");
+  assert.equal(controls.pauseButton.disabled, true);
+  assert.equal(controls.resetButton.disabled, true);
+  assert.equal(controls.feeInput.disabled, true);
+
+  setBootstrapControls(controls, false);
+  assert.equal(controls.startButton.disabled, false);
+  assert.equal(controls.startButton.textContent, "▶ 시작");
+  assert.equal(controls.pauseButton.disabled, false);
+  assert.equal(controls.resetButton.disabled, false);
+  assert.equal(controls.feeInput.disabled, false);
 });
